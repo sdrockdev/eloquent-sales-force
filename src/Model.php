@@ -50,7 +50,7 @@ abstract class Model extends EloquentModel
 	public function writeableAttributes($exclude = [])
 	{
 		$fields = array_merge($this->readonly, $exclude);
-		return Arr::except($this->attributes, $fields);
+		return Arr::except($this->getDirty(), $fields);
 	}
 
 	public static function create(array $attributes)
