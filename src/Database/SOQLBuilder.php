@@ -82,7 +82,10 @@ class SOQLBuilder extends Builder
 	 */
 	public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null)
 	{
-		$columns = $this->getSalesForceColumns($columns);
+		// Added by Nick T to use custom model columns
+		$cols = count($this->model->columns) ?
+			$this->model->columns :
+			$this->getSalesForceColumns($columns, $this->model->getTable());
 
 		$table = $this->model->getTable();
 
@@ -100,7 +103,7 @@ class SOQLBuilder extends Builder
 		$page = $page ?: Paginator::resolveCurrentPage($pageName);
 		$perPage = $perPage ?: $this->model->getPerPage();
 		$results = $total
-			? /** @scrutinizer ignore-call */ $this->forPage($page, $perPage)->get($columns)
+			? /** @scrutinizer ignore-call */ $this->forPage($page, $perPage)->get($cols)
 			: $this->model->newCollection();
 		return $this->paginator($results, $total, $perPage, $page, [
 			'path' => Paginator::resolveCurrentPath(),
