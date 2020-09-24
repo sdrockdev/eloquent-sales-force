@@ -46,19 +46,23 @@ class SOQLBatch extends Collection
         ];
     }
 
-    public function push(...$builder)
+    public function push(...$builders)
     {
-        return tap($this, function($collection) use ($builder) {
-            $collection->batch($builder);
-        });
+        $tempColl = null;
+        foreach ($builders as $builder) {
+            $tempColl = tap($this, function($collection) use ($builder) {
+                $collection->batch($builder);
+            });
+        }
+        return $tempColl ?: $this;
     }
 
-    public function put($builder, $tag)
+    /*public function put($tag, $builder)
     {
         return tap($this, function($collection) use ($builder, $tag) {
             $collection->batch($builder, $tag);
         });
-    }
+    }*/
 
     public function batch(Builder $builder, $tag = null)
     {
