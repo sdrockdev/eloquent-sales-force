@@ -103,6 +103,9 @@ class SOQLConnection extends Connection
 		$bindings = array_map(function($item) {
 			try {
 				if (!$this->isSalesForceId($item) && \Carbon\Carbon::parse($item) !== false) {
+					if ( $this->isSalesForceNumericString($item) ) {
+						return "'$item'";
+					}
 					return $item;
 				}
 			} catch (\Exception $e) {
@@ -130,5 +133,15 @@ class SOQLConnection extends Connection
 	public function isSalesForceId($str)
 	{
 		return boolval(\preg_match('/^[0-9a-zA-Z]{15,18}$/', $str));
+	}
+
+	/**
+	 * Added by Nick T to support CaseNumbers in Salesforce queries.
+	 * This only supports a very specific use case and is not well-tested
+	 */
+	public function isSalesForceNumericString($str)
+	{
+		return strlen($str) == 8 &&
+			(string)(int)$str == $str;
 	}
 }
