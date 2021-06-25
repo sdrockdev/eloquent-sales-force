@@ -10,7 +10,6 @@ use Illuminate\Database\Schema\Grammars\MySqlGrammar as SchemaGrammar;
 use Omniphx\Forrest\Exceptions\MissingResourceException;
 use Lester\EloquentSalesForce\Facades\SObjects;
 use Closure;
-use Carbon\Carbon;
 use Illuminate\Support\Str;
 
 class SOQLConnection extends Connection
@@ -105,7 +104,7 @@ class SOQLConnection extends Connection
 				if ( $this->isSalesForceNumericString($item) ) {
 					return "'$item'";
 				}
-				if (!$this->isSalesForceId($item) && \Carbon\Carbon::parse($item) !== false) {	
+				if (!$this->isSalesForceId($item) && strtotime($item) !== false) {
 					return $item;
 				}
 			} catch (\Exception $e) {
