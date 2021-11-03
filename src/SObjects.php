@@ -8,6 +8,7 @@ use Omniphx\Forrest\Exceptions\MissingResourceException;
 use Omniphx\Forrest\Exceptions\MissingVersionException;
 use Lester\EloquentSalesForce\Database\SOQLBatch;
 use Illuminate\Support\Str;
+use Illuminate\Support\Arr;
 use Cache;
 use Session;
 use Log;
@@ -22,26 +23,26 @@ class SObjects
 		$this->batch = new SOQLBatch([]);
 	}
 
-	/**
-	 * Bulk update SObjects in SalesForce
-	 *
-	 * @param  \Illuminate\Support\Collection $collection [collection of Lester\EloquentSalesForce\Model]
-	 * @param  boolean                     $allOrNone  [Should update fail entirely if one object fails to update?]
-	 */
 	public function update(\Illuminate\Support\Collection $collection, $allOrNone = false)
 	{
-		foreach ($collection->chunk(200) as $collectionBatch) {
-			self::composite('sobjects', [
+        $chunkSize = config('eloquent_sf.batch.insert.size', 200) <= 200 ? config('eloquent_sf.batch.insert.size', 200) : 200;
+
+		foreach ($collection->chunk($chunkSize) as $collectionBatch) {
+			$results = self::composite('sobjects', [
 				'method' => 'patch',
 				'body' => tap([
 					'allOrNone' => $allOrNone,
 					'records' => $collectionBatch->map(function($object) {
-						return $object->writeableAttributes();
+                        $attributes = $object->writeableAttributes(['IsDeleted', 'CreatedDate', 'LastModifiedDate']);
+						//return $object->writeableAttributes(['IsDeleted', 'CreatedDate', 'LastModifiedDate']);
+                        //dd($object->getDirty() + ['Id' => $object->Id]);
+                        return $object->getDirty() + ['Id' => $object->Id, 'attributes' => $attributes['attributes']];
 					})->values()
 				], function($payload) {
 					$this->log('SOQL Bulk Update', $payload);
 				})
 			]);
+            $this->log('SOQL Bulk Update', $results);
 		}
 	}
 
@@ -51,17 +52,29 @@ class SObjects
 	public function authenticate()
 	{
 		$storage = ucwords(config('eloquent_sf.forrest.storage.type'));
-		if (!$storage::has(config('eloquent_sf.forrest.storage.path') . 'token'))
-			Forrest::authenticate();
+		if (!$storage::has(config('eloquent_sf.forrest.storage.path') . 'token')) {
+			if (config('eloquent_sf.forrest.authentication') == 'WebServer') return Forrest::authenticate();
+            else Forrest::authenticate();
+        }
 		$tokens = (object) decrypt($storage::get(config('eloquent_sf.forrest.storage.path') . 'token'));
 		Session::put('eloquent_sf_instance_url', $tokens->instance_url);
 		return $tokens;
 	}
 
+    public function authorize()
+    {
+        return Forrest::authenticate();
+    }
+
 	public function instanceUrl()
 	{
 		return Session::get('eloquent_sf_instance_url');
 	}
+
+    public function callback()
+    {
+        return Forrest::callback();
+    }
 
 	public function __call($name, $arguments)
 	{
@@ -92,10 +105,11 @@ class SObjects
 	 * @param  boolean $full   [description]
 	 * @return [type]          [description]
 	 */
-	public function describe($object, $full = false)
+	public function describe($object, $key = null, $filter = null)
 	{
 		self::authenticate();
-		return $full ? $this->object($object)->describe() : Forrest::describe($object);
+		if ($key === null) return Forrest::describe($object);
+        return Arr::get(Forrest::describe($object), $key, null);
 	}
 
 	/**
@@ -139,7 +153,7 @@ class SObjects
 	{
 		$retval = '';
 		for ($i = 0; $i < strlen($str); $i++)
-			$retval .= strrpos("AABCDEFGHIJKLMNOPQRSQUVWXYZ", substr($str, $i, 1)) ? '1' : '0';
+			$retval .= strrpos("ABCDEFGHIJKLMNOPQRSQUVWXYZ", substr($str, $i, 1)) ? '1' : '0';
 
 		return $retval;
 	}
@@ -190,5 +204,18 @@ class SObjects
 
 		Log::channel($logs)->$level($message, $details);
 	}
+
+    /**
+     * Based on characters and length of $str, determine if it appears to be a
+     * SalesForce ID.
+     *
+     * @param string $str String to test
+     *
+     * @return bool
+     */
+    public function isSalesForceId($str)
+    {
+        return boolval(\preg_match('/^[0-9a-zA-Z]{15,18}$/', $str));
+    }
 
 }

@@ -4,6 +4,10 @@ namespace Lester\EloquentSalesForce;
 
 use Lester\EloquentSalesForce\Facades\SObjects as SfFacade;
 use Illuminate\Support\Arr;
+use Lester\EloquentSalesForce\Console\MakeModelCommand;
+use Lester\EloquentSalesForce\Console\SyncFromSalesforce;
+use Lester\EloquentSalesForce\TestLead;
+use Lester\EloquentSalesForce\TestObserver;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
@@ -15,6 +19,17 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
 		$this->publishes([
 			self::CONFIG_PATH => config_path('eloquent_sf.php'),
 		], 'config');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                MakeModelCommand::class,
+                SyncFromSalesforce::class,
+            ]);
+        }
+
+        $this->loadRoutesFrom(__DIR__.'/../routes/api.php');
+
+        TestLead::observe(TestObserver::class);
 	}
 
 	public function register()
@@ -54,7 +69,8 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
 			SfFacade::authenticate();
 			$layouts = SfFacade::sobjects($table . '/' . config('eloquent_sf.layout') . '/');
 			$fields = Arr::pluck($layouts["fieldItems"], 'layoutComponents.0');
-			$columns = ['Id'];
+			$columns = ['Id', 'CreatedDate', 'LastModifiedDate'];
+            if (!in_array($table, config('eloquent_sf.noSoftDeletesOn', ['User']))) $columns[] = 'IsDeleted';
 			self::getDetailNames($fields, $columns);
 		}
 		return $columns;
