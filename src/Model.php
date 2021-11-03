@@ -4,6 +4,7 @@ namespace Lester\EloquentSalesForce;
 
 use Session;
 use Log;
+use Carbon\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
@@ -16,10 +17,36 @@ abstract class Model extends EloquentModel
 {
 	protected $guarded = [];
 	protected $readonly = [];
+
+    protected $dates = [
+        'CreatedDate',
+        'LastModifiedDate',
+    ];
+
+    //public $timestamps = false;
+
+    /**
+     * The name of the "created at" column.
+     *
+     * @var string
+     */
+    const CREATED_AT = 'CreatedDate';
+
+    /**
+     * The name of the "updated at" column.
+     *
+     * @var string
+     */
+    const UPDATED_AT = 'LastModifiedDate';
+
 	private $always_readonly = [
 		'Id',
 		'attributes',
 	];
+
+    public $incrementing = false;
+
+    public $wasRecentlyCreated = false;
 
 	public $columns = [];
 
@@ -41,6 +68,10 @@ abstract class Model extends EloquentModel
 	{
 		parent::__construct($attributes);
 
+        if (isset($attributes['Id'])) {
+            $this->exists = true;
+        }
+
 		$this->table = $table ?: $this->table ?: class_basename($this);
 		$this->attributes['attributes'] = [
 			'type' => $this->table
@@ -53,17 +84,17 @@ abstract class Model extends EloquentModel
 		return Arr::except($this->getDirty(), $fields);
 	}
 
-	public static function create(array $attributes)
+	/*public static function create(array $attributes)
 	{
 		return (new static($attributes))->save();
-	}
+	}*/
 
-	public function update(array $attributes = array(), array $options = array())
+	/*public function update(array $attributes = array(), array $options = array())
 	{
 
 		$this->attributes = array_merge(Arr::only($this->attributes, ['Id']), $attributes);
 		return $this->save($options);
-	}
+	}*/
 
 	public function delete()
 	{
@@ -80,37 +111,114 @@ abstract class Model extends EloquentModel
 		}
 	}
 
-	public function save(array $options = array())
-	{
-		/** @scrutinizer ignore-call */
-		SObjects::authenticate();
-		$object = $this->sfObject();
-		$method = $this->sfMethod();
+    public function forceDelete()
+    {
+        return $this->delete();
+    }
 
-		$body = $this->writeableAttributes(['Id', 'attributes']);
+    /**
+     * Perform a model insert operation.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return bool
+     */
+    protected function performInsert($query)
+    {
+        if ($this->fireModelEvent('creating') === false) {
+            return false;
+        }
 
-		try {
-			/** @scrutinizer ignore-call */
-			$result = SObjects::sobjects($object, [
-				'method' => $method,
-				'body' => $body
-			]);
-			SObjects::log("SOQL $method $object", $body);
+        // If the model has an incrementing key, we can use the "insertGetId" method on
+        // the query builder, which will give us back the final inserted ID for this
+        // table from the database. Not all tables have to be incrementing though.
+        $attributes = method_exists($this, 'getAttributesForInsert') ? $this->getAttributesForInsert() : $this->getAttributes();
 
-			if (isset($result['success'])) {
-				try {
-					return $this->find($result['id']);
-				} catch (\Exception $e) {
-					if (isset($result['id'])) {
-						$this->Id = $result['id'];
-					}
-				}
-			}
-			return $this;
-		} catch (\Exception $e) {
-			throw $e;
-		}
-	}
+        $attributes = collect($this->getDirty())->map(function($field, $key) {
+            if ($this->isDateAttribute($key)) {
+                $carbon = new Carbon($field);
+                $format = $this->getDateFormats($key);
+                $field = $carbon->$format();
+            }
+            return $field;
+        });
+
+        if (empty($attributes)) {
+            return $this;
+        }
+
+        SObjects::authenticate();
+        $object = $this->sfObject();
+
+        $result = SObjects::sobjects($object, [
+            'method' => 'post',
+            'body' => $attributes
+        ]);
+
+        if (isset($result['success'])) {
+            if (isset($result['id'])) {
+                $this->Id = $result['id'];
+            }
+            //return $this;
+        } else {
+            return false;
+        }
+
+        // We will go ahead and set the exists property to true, so that it is set when
+        // the created event is fired, just in case the developer tries to update it
+        // during the event. This will allow them to do so and run an update here.
+        $this->exists = true;
+
+        $this->wasRecentlyCreated = true;
+
+        $this->fireModelEvent('created', false);
+
+        return $this;
+    }
+
+    /**
+     * Perform a model update operation.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return bool
+     */
+    protected function performUpdate($query)
+    {
+        // If the updating event returns false, we will cancel the update operation so
+        // developers can hook Validation systems into their models and cancel this
+        // operation if the model does not pass validation. Otherwise, we update.
+        if ($this->fireModelEvent('updating') === false) {
+            return false;
+        }
+
+        // Once we have run the update operation, we will fire the "updated" event for
+        // this model instance. This will allow developers to hook into these after
+        // models are updated, giving them a chance to do any special processing.
+        $dirty = collect($this->getDirty())->map(function($field, $key) {
+            if ($this->isDateAttribute($key)) {
+                $carbon = new Carbon($field);
+                $format = $this->getDateFormats($key);
+                $field = $carbon->$format();
+            }
+            return $field;
+        });
+
+        if ($dirty->count() > 0) {
+
+            SObjects::authenticate();
+            $object = $this->sfObject();
+
+            $result = SObjects::sobjects($object, [
+                'method' => 'patch',
+                'body' => $dirty->toArray(),
+            ]);
+
+            $this->syncChanges();
+
+            $this->fireModelEvent('updated', false);
+        }
+
+        return true;
+    }
 
 	private function sfObject()
 	{
@@ -261,9 +369,24 @@ abstract class Model extends EloquentModel
 		return (new static([]))->columns;
 	}
 
-	public function getPicklistValues($field)
-	{
-		return SObjects::getPicklistValues($this->table, $field);
-	}
+    public function trashed()
+    {
+        return $this->IsDeleted ?? false;
+    }
+
+    public function restore()
+    {
+        throw new \Exception('The SalesForce Rest API does not natively support UNDELETE');
+    }
+
+    public function getExistsAttribute()
+    {
+        return $this->Id !== null;
+    }
+
+    public function getDateFormats($column)
+    {
+        return in_array($column, $this->shortDates) ? 'toDateString' : 'toIso8601ZuluString';
+    }
 
 }

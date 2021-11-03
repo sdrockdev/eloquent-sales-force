@@ -3,16 +3,27 @@
 namespace Lester\EloquentSalesForce\Tests;
 
 use Lester\EloquentSalesForce\ServiceProvider;
+use Lester\EloquentSalesForce\SalesForceObject;
 use Lester\EloquentSalesForce\TestLead;
+use Lester\EloquentSalesForce\TestModel;
 use Lester\EloquentSalesForce\TestTask;
+use Lester\EloquentSalesForce\TestUser;
 use Orchestra\Testbench\TestCase;
 use Illuminate\Support\Facades\Config;
 use Lester\EloquentSalesForce\Facades\SObjects;
+use Lester\EloquentSalesForce\Database\SOQLBatch;
 use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
+use PHPUnit\Framework\Error\Notice;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Database\Schema\Blueprint;
+use Forrest;
+use GuzzleHttp\Client;
+use Carbon\Carbon;
 
 class EloquentSalesForceTest extends TestCase
 {
+
     protected function getPackageProviders($app)
     {
         return [ServiceProvider::class];
@@ -20,75 +31,201 @@ class EloquentSalesForceTest extends TestCase
 
     private $lead;
 
-    /**
-     * @covers Lester\EloquentSalesForce\Database\SOQLBatch::batch
-     * @covers Lester\EloquentSalesForce\Database\SOQLBatch::results
-     * @covers Lester\EloquentSalesForce\Database\SOQLBatch::get
-     * @covers Lester\EloquentSalesForce\Database\SOQLBatch::class
-     * @covers Lester\EloquentSalesForce\Database\SOQLBatch::builder
-     * @covers Lester\EloquentSalesForce\Database\SOQLBatch::emptyItem
-     * @covers Lester\EloquentSalesForce\Database\SOQLBatch::run
-     * @covers Lester\EloquentSalesForce\Database\SOQLBuilder::toSql
-     * @covers Lester\EloquentSalesForce\Database\SOQLBuilder::batch
-     * @covers Lester\EloquentSalesForce\SObjects::getBatch
-     * @covers Lester\EloquentSalesForce\SObjects::runBatch
-     */
-    public function testBatchQuery()
+    public function testDirtyAndChanges()
     {
-        TestLead::limit(5)->where('FirstName', '!=', 'test')->orWhere('FirstName', 'not like', 'test%')->batch();
-        TestTask::limit(3)->where('Subject', '!=', 'test')->batch('tasks');
+        $email = strtolower(Str::random(10) . '@test.com');
+        $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => $email]);
 
-        $errors = [];
-        $batch = SObjects::runBatch($errors);
+        $this->assertFalse($lead->isDirty());
 
-        $leads = $batch->results('TestLead');
-        $tasks = $batch->get('tasks');
+        $lead->FirstName = 'Testing';
 
-        $leadsClass = $batch->class('TestLead');
-        $tasksBuilder = $batch->builder('tasks');
+        $this->assertTrue($lead->isDirty());
 
-        $this->assertInstanceOf('Lester\EloquentSalesForce\TestLead', $leadsClass);
-        $this->assertInstanceOf('Lester\EloquentSalesForce\Database\SOQLBuilder', $tasksBuilder);
+        $this->assertCount(1, $lead->getDirty());
 
-        $this->assertCount(5, $leads);
-        $this->assertCount(3, $tasks);
+        $lead->save();
 
-        $this->assertCount(2, $batch);
-
-        for ($i = 0; $i < 30; $i++) {
-            TestLead::limit($i + 1)->where('FirstName', '!=', 'test')->batch('test_' . $i);
-        }
-        $batch = SObjects::runBatch();
-
-        $this->assertCount(10, $batch->results('test_9'));
-        $this->assertCount(30, $batch);
+        $this->assertCount(1, $lead->getChanges());
     }
 
-	/**
-	 * @covers Lester\EloquentSalesForce\TestLead
-	 * @covers Lester\EloquentSalesForce\Model
-	 * @covers Lester\EloquentSalesForce\Model::create
-	 * @covers Lester\EloquentSalesForce\Model::save
-	 * @covers Lester\EloquentSalesForce\Database\SOQLBuilder
-	 * @covers Lester\EloquentSalesForce\Database\SOQLConnection
-	 * @covers Lester\EloquentSalesForce\Database\SOQLGrammar
-	 * @covers Lester\EloquentSalesForce\Database\SOQLGrammar::whereBasic
-	 */
+    public function testWebAuthentication()
+    {
+        config([
+            'eloquent_sf.forrest.authentication' => 'WebServer',
+            'eloquent_sf.forrest.credentials' => [
+                'driver' => 'soql',
+                'database' => null,
+                'consumerKey'    => getenv('WF_CONSUMER_KEY'),
+                'consumerSecret' => getenv('WF_CONSUMER_SECRET'),
+                'callbackURI'    => url('/login/salesforce/callback'),
+                'loginURL'       => getenv('LOGIN_URL'),
+            ],
+            'eloquent_sf.forrest.parameters' => [
+                'display'   => 'page',
+                'immediate' => false,
+                'state'     => '',
+                'scope'     => 'full',
+                'prompt'    => 'select_account',
+            ],
+        ]);
+
+        config([
+            'forrest' => config('eloquent_sf.forrest'),
+        ]);
+
+        \Artisan::call('cache:clear');
+
+        $response = $this->get('/login/salesforce');
+
+        $response->assertOk();
+    }
+
+    public function testSimpleObject()
+    {
+        $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
+        $test = SalesForceObject::select('Id')
+            ->from('Lead')
+            ->where('Email', 'test@test.com')
+            ->first();
+
+        $this->assertEquals($lead->Id, $test->Id);
+    }
+
+    public function testSyncsModelsToSalesforce()
+    {
+        Schema::create('test_models', function (Blueprint $table) {
+            $table->id();
+            $table->string('email')->unique();
+            $table->string('salesforce')->nullable();
+            $table->string('name');
+            $table->string('company');
+            $table->timestamps();
+        });
+
+        $test = TestModel::create([
+            'email' => 'test@test.com',
+            'name' => 'Rob Lester',
+            'company' => 'Test Company',
+        ]);
+
+        $this->assertCount(1, TestModel::get());
+        $this->assertCount(1, TestLead::where('Email', 'test@test.com')->get());
+
+        $test->update([
+            'email' => 'test2@test.com'
+        ]);
+
+        $object = TestLead::where('Email', 'test2@test.com')->first();
+
+        $this->assertEquals('test2@test.com', $test->fresh()->email);
+        $this->assertEquals('test2@test.com', $object->Email);
+
+        config([
+            'eloquent_sf.syncTwoWay' => true,
+            'eloquent_sf.syncPriority' => 'local',
+        ]);
+
+        sleep(2);
+
+        $object->update([
+            'Email' => 'test3@test.com'
+        ]);
+
+        $test->syncWithSalesforce();
+
+        $test->refresh();
+
+        $this->assertEquals('test3@test.com', $test->email);
+
+        $test4 = TestModel::create([
+            'email' => 'test4@test.com',
+            'name' => 'Rob Lester',
+            'company' => 'Test Company',
+        ]);
+
+        $this->assertNotNull(TestLead::where('Email', 'test4@test.com')->first());
+        $this->assertEquals('Rob', TestLead::where('Email', 'test4@test.com')->first()->FirstName);
+
+        $object = TestLead::where('Email', 'test4@test.com')->first();
+
+        $object->update([
+            'Email' => 'test5@test.com'
+        ]);
+
+        $test4->email = 'test6@test.com';
+
+        $test4->syncWithSalesforce();
+
+        $this->assertEquals($test4->email, $object->refresh()->Email);
+
+    }
+
+    public function testSyncCommand()
+    {
+        config([
+            'eloquent_sf.syncTwoWay' => true,
+            'eloquent_sf.syncPriority' => 'local',
+            'eloquent_sf.syncTwoWayModels' => [
+                'Lester\EloquentSalesForce\TestModel',
+            ],
+        ]);
+
+        Schema::create('test_models', function (Blueprint $table) {
+            $table->id();
+            $table->string('email')->unique();
+            $table->string('salesforce')->nullable();
+            $table->string('name');
+            $table->string('company');
+            $table->timestamps();
+        });
+
+        $test = TestModel::create([
+            'email' => 'test@test.com',
+            'name' => 'Rob Test',
+            'company' => 'Test Company',
+        ]);
+
+        $object = TestLead::find($test->refresh()->salesforce)->first();
+
+        $this->assertNotNull($object);
+
+        sleep(2);
+
+        $object->update([
+            'Email' => 'test2@test.com'
+        ]);
+
+        \Artisan::call('db:sync');
+
+        $this->assertEquals($object->Email, $test->refresh()->email);
+
+        $response = $this->post('api/syncObject/' . $object->Id);
+
+        $response->assertStatus(200);
+    }
+
     public function testObjectCreate()
     {
 	    $email = strtolower(Str::random(10) . '@test.com');
 	    $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => $email]);
-	    $lead = TestLead::where('Email', $email)->first();
 
+        $lead = TestLead::where('Email', $email)->first();
+
+        $this->assertNotNull($lead);
         $this->assertEquals($lead->Email, $email);
+        $this->assertEquals($lead->Phone, '1231231234');
+        $this->assertEquals($lead->Company, 'Test Company');
 
-        try {
-        	$lead->update(['Name' => 'test']);
-        } catch (\Exception $e) {
+        TestLead::truncate();
 
-        }
+        $lead = TestLead::firstOrCreate(
+            ['Email' => $email],
+            ['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test']
+        );
 
-        $lead->delete();
+        $this->assertTrue($lead->wasRecentlyCreated);
     }
 
     /**
@@ -98,7 +235,7 @@ class EloquentSalesForceTest extends TestCase
     public function testObjectMass()
     {
         $collection = collect([]);
-        for ($i = 0; $i < 210; $i++) {
+        for ($i = 0; $i < 10; $i++) {
             $email = strtolower(Str::random(10) . '@test.com');
             $collection->push(new TestLead(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => $email]));
         }
@@ -107,12 +244,12 @@ class EloquentSalesForceTest extends TestCase
         $ids = $results->pluck('Id');
         $results = TestLead::whereIn('Id', $ids)->get();
 
-        $results = $results->map(function($lead) {
+        $this->assertCount(10, $results);
+
+        $results = $results->slice(0, 3)->map(function($lead) {
             $lead->Company = 'Test 2';
             return $lead;
         });
-
-        $this->assertCount(210, $results);
 
         SObjects::update($results);
 
@@ -120,9 +257,21 @@ class EloquentSalesForceTest extends TestCase
 
         $this->assertEquals($lead->Company, 'Test 2');
 
-        foreach ($results as $lead) {
-            $lead->delete();
-        }
+        $batch = new SOQLBatch();
+
+        $batch->query(TestLead::where('Company', 'Test'));
+
+        $this->expectException(\Exception::class);
+        $batch->push(TestLead::where('Company', 'Test 2'));
+
+        $results = $batch->run();
+
+        $this->assertCount(7, $results->get('TestLead_0'));
+        $this->assertCount(3, $results->get('TestLead_1'));
+
+        TestLead::truncate();
+
+        $this->assertCount(0, TestLead::all());
     }
 
     /*
@@ -132,13 +281,31 @@ class EloquentSalesForceTest extends TestCase
 	 */
     public function testObjectUpdate()
     {
-	    $email = strtolower(Str::random(10) . '@test.com');
+        $email = strtolower(Str::random(10) . '@test.com');
 	    $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => $email]);
-	    $lead->update(['FirstName' => 'Robert']);
+
+        $lead->update(['FirstName' => 'Robert']);
+
         $lead = TestLead::where('Email', $email)->first();
 
         $this->assertEquals($lead->FirstName, 'Robert');
+
+        $lead = TestLead::updateOrCreate(
+            ['Email' => $email],
+            ['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test']
+        );
+
+        $this->assertEquals($lead->FirstName, 'Rob');
+        $this->assertFalse($lead->wasRecentlyCreated);
+
         $lead->delete();
+
+        $lead = TestLead::updateOrCreate(
+            ['Email' => $email],
+            ['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test']
+        );
+
+        $this->assertTrue($lead->wasRecentlyCreated);
     }
 
     /**
@@ -147,8 +314,20 @@ class EloquentSalesForceTest extends TestCase
 	 */
     public function testWhereBasic()
     {
-	    $leads = TestLead::where('FirstName', 'not like', 'xxxxxxxxxxxxx')->limit(5)->get();
-	    $this->assertCount(5, $leads);
+        TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
+	    $leads = TestLead::where('FirstName', 'not like', 'xxxxxxxxxxxxx')->get();
+	    $this->assertTrue($leads->count() > 0);
+
+        $this->assertInstanceOf(Carbon::class, $leads->first()->CreatedDate);
+
+        $int = 123;
+        $lead = TestLead::select('Id', 'CreatedDate')->where('LastName', 'August')->where('Email', (string)$int)->first();
+
+        $this->assertNull($lead);
+
+        $user = TestUser::first();
+        $this->assertNotNull($user);
     }
 
     /*
@@ -157,8 +336,10 @@ class EloquentSalesForceTest extends TestCase
      */
     public function testWhereBoolean()
     {
+        TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
         $leads = TestLead::where('DoNotCall', false)->limit(5)->get();
-        $this->assertCount(5, $leads);
+        $this->assertTrue($leads->count() > 0);
     }
 
     /*
@@ -167,8 +348,24 @@ class EloquentSalesForceTest extends TestCase
      */
     public function testWhereIn()
     {
+
+        TestLead::insert(collect([
+            new TestLead([
+                'Email' => strtolower(Str::random(10) . '@test.com'),
+                'FirstName' => 'Kathy',
+                'LastName' => 'Test',
+                'Company' => 'TestCo',
+            ]),
+            new TestLead([
+                'Email' => strtolower(Str::random(10) . '@test.com'),
+                'FirstName' => 'Betty',
+                'LastName' => 'Test',
+                'Company' => 'TestCo',
+            ]),
+        ]));
+
         $leads = TestLead::whereIn('FirstName', ['Kathy', 'Betty'])->get();
-        $this->assertTrue($leads->count() >= 2);
+        $this->assertCount(2, $leads);
     }
 
     /**
@@ -177,14 +374,35 @@ class EloquentSalesForceTest extends TestCase
 	 */
     public function testWhereDate()
     {
-	    $leads = TestLead::where('CreatedDate', '>=', '2010-10-01T12:00:00.000+00:00')->limit(5)->get();
-	    $this->assertCount(5, $leads);
+        TestLead::create([
+            'FirstName' => 'Rob',
+            'LastName' => 'Lester',
+            'Company' => 'Test',
+            'Email' => 'test@test.com',
+            'Custom_Date_Field__c' => now()->subDay(),
+        ]);
+
+	    $leads = TestLead::where('CreatedDate', '>=', today())->get();
+	    $this->assertTrue($leads->count() > 0);
+
+        $lead = TestLead::where('Email', 'test@test.com')->first();
+
+        $now = now();
+        $lead->update([
+            'Custom_Date_Field__c' => $now,
+            'Company' => 'Test Co',
+        ]);
+        $lead = TestLead::select('Custom_Date_Field__c', 'Id')->where('Email', 'test@test.com')->first();
+
+        $this->assertEquals($now->startOfDay(), $lead->Custom_Date_Field__c);
     }
 
     public function testOrWhere()
     {
+        TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
         $leads = TestLead::where('FirstName', 'not like', 'xxxxxxxxxxxxx')->orWhere('Owner.UserRole.Name', 'like', 'yyyyyyyyyy%')->limit(5)->get();
-        $this->assertCount(5, $leads);
+        $this->assertTrue($leads->count() > 0);
     }
 
     /*
@@ -250,9 +468,11 @@ class EloquentSalesForceTest extends TestCase
 	 */
     public function testPaginate()
     {
+        TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
 	    $pageone = TestLead::paginate(3);
 
-	    $this->assertCount(3, $pageone);
+	    $this->assertTrue($pageone->count() > 0);
 
     }
 
@@ -267,10 +487,25 @@ class EloquentSalesForceTest extends TestCase
 
         $statuses = $lead->getPicklistValues('Status');
 
+        $this->assertNotNull($statuses);
         $this->assertTrue($statuses->count() > 0);
-        $this->assertTrue($statuses !== null);
 
-        $lead->delete();
+        $statuses = TestLead::getPicklistValues('Status');
+
+        $this->assertNotNull($statuses);
+        $this->assertTrue($statuses->count() > 0);
+
+    }
+
+    public function testMassDelete()
+    {
+        $email = strtolower(Str::random(10) . '@test.com');
+        $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => $email]);
+
+        TestLead::select('Id')->delete();
+
+        $this->assertCount(0, TestLead::all());
+
     }
 
     /**
@@ -281,17 +516,62 @@ class EloquentSalesForceTest extends TestCase
      */
     public function testFacadeFuncs()
     {
-        SObjects::authenticate();
+        //SObjects::authenticate();
+
+        TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
         $query = \Forrest::query('select Id from Lead limit 1');
 
         $object = SObjects::object($query['records'][0]);
         $this->assertInstanceOf('Lester\EloquentSalesForce\SalesForceObject', $object);
 
-        $testLeadFields = SObjects::describe('Lead');
+        $testLeadFields = SObjects::describe('Product2');
+
         $this->assertNotNull($testLeadFields);
 
         $convertedId = SObjects::convert('5003000000D8cuI');
         $this->assertEquals('5003000000D8cuIAAR', $convertedId);
+
+        TestLead::truncate();
+
+    }
+
+    public function testSoftDeletes()
+    {
+        $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
+        $allLeads = TestLead::get();
+        $this->assertCount(1, $allLeads);
+
+        $this->assertFalse($lead->trashed());
+
+        $lead->delete();
+
+        $allLeads = TestLead::get();
+        $this->assertCount(0, $allLeads);
+
+        $allLeads = TestLead::withTrashed()->get();
+            //dd($allLeads);
+        $this->assertTrue($allLeads->count() > 0);
+
+        $deleted = TestLead::withTrashed()->where('IsDeleted', TRUE)->first();
+
+        $this->assertTrue($deleted->trashed());
+
+        $this->expectException(\Exception::class);
+        $deleted->restore();
+
+    }
+
+    public function testReplicate()
+    {
+        $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
+
+        $leadTwo = $lead->replicate()->fill([
+            'Email' => 'test2@test.com'
+        ])->save();
+
+        $this->assertTrue($leadTwo->wasRecentlyCreated);
 
     }
 
@@ -332,11 +612,11 @@ class EloquentSalesForceTest extends TestCase
 				     * Compression can be set to 'gzip' or 'deflate'
 				     */
 				    'defaults'       => [
-				        'method'          => 'get',
-				        'format'          => 'json',
-				        'compression'     => false,
-				        'compressionType' => 'gzip',
-				    ],
+                        'method'          => 'get',
+                        'format'          => 'json',
+                        'compression'     => false,
+                        'compressionType' => 'gzip',
+                    ],
 
 				    /*
 				     * Where do you want to store access tokens fetched from Salesforce
@@ -387,6 +667,11 @@ class EloquentSalesForceTest extends TestCase
 			'cache.default' => 'file',
 		]);
 
+
+
+        TestLead::truncate();
+        TestTask::truncate();
+
 	}
 
 	/**
@@ -397,7 +682,7 @@ class EloquentSalesForceTest extends TestCase
 
 	public function createApplication()
 	{
-		if (getenv('SCRUT_TEST')) return parent::createApplication();
+		if (getenv('GIT_TEST')) return parent::createApplication();
 
         $env = file_get_contents(__DIR__.'/../.env');
 
@@ -414,6 +699,9 @@ class EloquentSalesForceTest extends TestCase
     {
         \Artisan::call('cache:clear');
 
+        //TestLead::truncate();
+
         parent::tearDown();
     }
+
 }

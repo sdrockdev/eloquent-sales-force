@@ -8,9 +8,13 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\JsonExpression;
 use Illuminate\Database\Query\Grammars\Grammar;
 use Lester\EloquentSalesForce\ServiceProvider;
+use SObjects;
+use Carbon\Carbon;
 
 class SOQLGrammar extends Grammar
 {
+    protected $model;
+
 	/**
 	 * The components that make up a select clause.
 	 *
@@ -30,6 +34,12 @@ class SOQLGrammar extends Grammar
 		'lock',
 	];
 
+    public function setModel($model)
+    {
+        $this->model = $model;
+        return $model;
+    }
+
 	/**
 	 * Wrap a single string in keyword identifiers.
 	 *
@@ -38,7 +48,7 @@ class SOQLGrammar extends Grammar
 	 */
 	protected function wrapValue($value)
 	{
-		return $value === '*' ? $value : '`' . str_replace('`', '``', $value) . '`';
+        return $value;
 	}
 
 	protected function unWrapValue($value)
@@ -55,7 +65,10 @@ class SOQLGrammar extends Grammar
 	 */
 	protected function whereBasic(Builder $query, $where)
 	{
-		// allow for "false" values to not be wrapped.
+        if ($this->isDate($where['column'])) {
+            return $this->whereDate($query, $where, $this->model->getDateFormats($where['column']));
+        }
+        // allow for "false" values to not be wrapped.
 		if (is_bool($where['value'])) {
 			return $this->whereBoolean($query, $where);
 		}
@@ -65,29 +78,69 @@ class SOQLGrammar extends Grammar
             return $this->whereLiteral($query, $where);
         }
 
-		if (Str::contains(strtolower($where['operator']), 'not like')) {
+        if (Str::contains(strtolower($where['operator']), 'not like')) {
 			return sprintf(
 				'(not %s like %s)',
 				$this->wrap($where['column']),
 				$this->parameter($where['value'])
 			);
 		}
-		return parent::whereBasic($query, $where);
+
+        return parent::whereBasic($query, $where);
 	}
+
+    protected function whereDate(Builder $query, $where, $format = 'toIso8601ZuluString')
+    {
+        $date = new Carbon($where['value']);
+        return $this->wrap($where['column']) . $where['operator'] . $date->$format();
+    }
+
+    /**
+     * Compile the "limit" portions of the query.
+     *
+     * @param  \Illuminate\Database\Query\Builder  $query
+     * @param  int  $limit
+     * @return string
+     */
+    protected function compileLimit(Builder $query, $limit)
+    {
+        return 'limit '.(int) $limit;
+    }
+
+    protected function isDate($column)
+    {
+        return in_array($column, $this->model->getDates());
+    }
+
+    /**
+     * Get the appropriate query parameter place-holder for a value.
+     *
+     * @param  mixed   $value
+     * @return string
+     */
+    public function parameter($value, $column = null)
+    {
+        if (is_int($value)) {
+            return '?';
+        }
+        if (SObjects::isSalesForceId($value) || is_string($value)) {
+            return "'?'";
+        }
+
+        return $this->isExpression($value) ? $this->getValue($value) : '?';
+    }
 
 	/**
 	 * {@inheritDoc}
 	 */
 	protected function whereIn(Builder $query, $where)
 	{
-		if (empty($where['values'])) {
-			// the below statement is invalid in SOQL
-			// return '0 = 1';
-			// since virtually every object in SalesForce has Id column then
-			// compare that field to null which should always be false.
-			return 'Id = null';
-		}
-		return parent::whereIn($query, $where);
+        if (! empty($where['values'])) {
+            //dd($this->wrap($where['column']).' in ('.$this->parameterize($where['values']).')');
+            return $this->wrap($where['column']).' in ('.$this->parameterize($where['values']).')';
+        }
+
+        return 'Id = null';
 	}
 
 	/**

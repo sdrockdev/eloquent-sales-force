@@ -9,19 +9,41 @@ use Lester\EloquentSalesForce\ServiceProvider;
 use Lester\EloquentSalesForce\Facades\SObjects;
 use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
+use PDO;
+use Lester\EloquentSalesForce\Model;
 
 class SOQLBuilder extends Builder
 {
-	/**
+    /**
 	 * {@inheritDoc}
 	 */
 	public function __construct(QueryBuilder $query)
 	{
-		$query->connection = new SOQLConnection(null);
+        //$pdo = new PDO('sqlite::memory:');
+        //$pdo->setAttribute( PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION );
+        //$pdo = new \Illuminate\Database\PDO\Connection($pdo);
+
+		$query->connection = new SOQLConnection();
 		$query->grammar = new SOQLGrammar();
 
 		parent::__construct($query);
 	}
+
+    /**
+     * Set a model instance for the model being queried.
+     *
+     * @param  \Illuminate\Database\Eloquent\Model  $model
+     * @return $this
+     */
+    public function setModel($model)
+    {
+        $this->model = $model;
+        $this->query->grammar->setModel($model);
+
+        $this->query->from($model->getTable());
+
+        return $this;
+    }
 
 	public function batch($tag = null)
 	{
@@ -30,29 +52,42 @@ class SOQLBuilder extends Builder
 
 	public function toSql()
 	{
-		$columns = implode(', ', $this->describe());
+        $columns = implode(', ', $this->describe());
 		$query = str_replace('*', $columns, parent::toSql());
 		$query = str_replace('`', '', $query);
-		$bindings = array_map(function($item) {
-			try {
-				if ( $this->isSalesForceNumericString($item) ) {
-					return "'$item'";
-				}
-				if (!$this->query->connection->isSalesForceId($item) && \Carbon\Carbon::parse($item) !== false) {
-					return $item;
-				}
-			} catch (\Exception $e) {
-				if (is_int($item) || is_float($item)) {
-					return $item;
-				} else {
-					return "'$item'";
-				}
-			}
-			return "'$item'";
-		}, $this->getBindings());
-		$prepared = Str::replaceArray('?', $bindings, $query);
+		/*$bindings = array_map(function($item) {
+            return (is_int($item) || is_float($item)) ? $item : "'$item'";
+        }, $this->getBindings());*/
+		$prepared = Str::replaceArray('?', $this->getBindings(), $query);
 		return $prepared;
 	}
+
+	// Old version, previously modified by Nick T
+	// public function toSql()
+	// {
+	// 	$columns = implode(', ', $this->describe());
+	// 	$query = str_replace('*', $columns, parent::toSql());
+	// 	$query = str_replace('`', '', $query);
+	// 	$bindings = array_map(function($item) {
+	// 		try {
+	// 			if ( $this->isSalesForceNumericString($item) ) {
+	// 				return "'$item'";
+	// 			}
+	// 			if (!$this->query->connection->isSalesForceId($item) && \Carbon\Carbon::parse($item) !== false) {
+	// 				return $item;
+	// 			}
+	// 		} catch (\Exception $e) {
+	// 			if (is_int($item) || is_float($item)) {
+	// 				return $item;
+	// 			} else {
+	// 				return "'$item'";
+	// 			}
+	// 		}
+	// 		return "'$item'";
+	// 	}, $this->getBindings());
+	// 	$prepared = Str::replaceArray('?', $bindings, $query);
+	// 	return $prepared;
+	// }
 
 	/**
 	 * {@inheritDoc}
@@ -60,8 +95,9 @@ class SOQLBuilder extends Builder
 	public function getModels($columns = ['*'])
 	{
 		if (count($this->model->columns) &&
-			in_array('*', /** @scrutinizer ignore-type */ $columns)) {
-			$cols = $this->model->columns;
+			in_array('*', $columns)) {
+			$cols = $this->model->columns + ['CreatedDate', 'LastModifiedDate'];
+            if (!in_array($this->model->getTable(), config('eloquent_sf.noSoftDeletesOn', ['User']))) $cols += ['IsDeleted'];
 		} else {
 			$cols = $this->getSalesForceColumns($columns);
 		}
@@ -120,6 +156,7 @@ class SOQLBuilder extends Builder
 	public function insert(\Illuminate\Support\Collection $collection)
 	{
 		$table = $this->model->getTable();
+        $chunkSize = config('eloquent_sf.batch.insert.size', 200) <= 200 ? config('eloquent_sf.batch.insert.size', 200) : 200;
 
 		$counter = 1;
 		$collection = $collection->map(function($object, $index) {
@@ -131,10 +168,9 @@ class SOQLBuilder extends Builder
 
 
 
-		/** @scrutinizer ignore-call */
 		try {
 			$responseCollection = collect([]);
-			foreach ($collection->chunk(200) as $collectionBatch) {
+			foreach ($collection->chunk($chunkSize) as $collectionBatch) {
 				$payload = [
 					'method' => 'post',
 					'body' => [
@@ -186,4 +222,50 @@ class SOQLBuilder extends Builder
 	{
 		return count($this->model->columns) ? $this->model->columns : $this->getSalesForceColumns(['*'], $this->model->getTable());
 	}
+
+    public function delete($allOrNone = false)
+    {
+        $models = collect($this->getModels());
+        foreach ($models->chunk(200) as $chunk) {
+            SObjects::composite('sobjects', [
+                'method' => 'delete',
+                'query' => [
+                    'allOrNone' => $allOrNone,
+                    'ids' => implode(',',$chunk->pluck('Id')->values()->toArray()),
+                ]
+            ]);
+        }
+
+    }
+
+    public function truncate()
+    {
+        return $this->delete();
+    }
+
+    public function withTrashed()
+    {
+        $this->query->connection = new SOQLConnection(true);
+        return $this;
+    }
+
+    public function onlyTrashed()
+    {
+        $this->query->connection = new SOQLConnection(true);
+        return $this->where('IsDeleted', true);
+    }
+
+    public function getPicklistValues($field)
+    {
+        $table = $this->model->getTable();
+        return SObjects::getPicklistValues($table, $field);
+    }
+
+    public function from($table)
+    {
+        $this->model->setTable($table);
+        $this->query->from($table);
+        return $this;
+    }
+
 }

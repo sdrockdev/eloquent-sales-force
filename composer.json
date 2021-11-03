@@ -20,14 +20,13 @@
     }
   ],
   "require": {
-    "php": ">=7.0",
-    "laravel/framework": ">=5.6",
-    "omniphx/forrest": ">=2.5.2"
-  },
-  "old-require":{
-    "guzzlehttp/guzzle": "^6.3"
+    "php": "^7.0 || ^8.0",
+    "guzzlehttp/guzzle": "^6.0 || ^7.0",
+    "laravel/framework": "^7.0 || ^8.40.0",
+    "omniphx/forrest": "^2.0"
   },
   "require-dev": {
+    "laravel/dusk": "^6.19",
     "orchestra/testbench": ">=3.5",
     "phpunit/phpunit": ">=6.0"
   },
@@ -48,7 +47,8 @@
     "test": "vendor/bin/phpunit --bootstrap=./vendor/autoload.php",
     "post-autoload-dump": [
         "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump"
-    ]
+    ],
+    "docs": "docsify serve ./docs"
   },
   "extra": {
     "laravel": {

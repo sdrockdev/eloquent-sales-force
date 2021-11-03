@@ -7,12 +7,31 @@ return [
 
 	'logging'			=> env('SOQL_LOG', 'single'),
 
+    'batch'             => [
+        'select' => [
+            'size' => 25
+        ],
+        'insert' => [
+            'size' => 200
+        ]
+    ],
+
+    'noSoftDeletesOn' => [
+        'User',
+    ],
+
+    'syncTwoWay' => false, // Indicate if you want SF changes to feed back to your local database. Otherwise it is a one-way sync. local->salesforce
+    'syncPriority' => 'salesforce', // If there is a conflict, noteablly a dirty local model when an inbound sync is occuring, ElSF will prefer this setting: 'salesforce' or 'local' or 'exception' or 'silent'
+    'syncTwoWayModels' => [
+
+    ],
+
 	// Override any Forrest settings here. The Forrest package config file is ignored, but all Forrest settings are supported here.
 	'forrest' => [
 		/*
 	     * Options include WebServer or UserPassword
 	     */
-		'authentication'	=> 'UserPassword',
+		'authentication'	=> env('SF_AUTH_METHOD', 'UserPassword'),
 
 		/*
 	     * Enter your credentials
@@ -20,6 +39,14 @@ return [
 	     * Likewise, callbackURI is only necessary for WebServer flow.
 	     */
 		'credentials' => config('database.connections.soql'),
+
+        'parameters' => [
+            'display'   => 'popup',
+            'immediate' => false,
+            'state'     => '',
+            'scope'     => 'full',
+            'prompt'    => 'select_account',
+        ],
 
 		/*
 		 * Default settings for resource requests.

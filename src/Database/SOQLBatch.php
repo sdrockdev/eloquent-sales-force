@@ -48,6 +48,12 @@ class SOQLBatch extends Collection
 
     public function push(...$builders)
     {
+        trigger_error('This method will be depricated in the next release to allow for legacy support - use query() instead.', \E_USER_WARNING);
+        return $this->query($builders);
+    }
+
+    public function query(...$builders)
+    {
         $tempColl = null;
         foreach ($builders as $builder) {
             $tempColl = tap($this, function($collection) use ($builder) {
@@ -66,7 +72,8 @@ class SOQLBatch extends Collection
 
     public function batch(Builder $builder, $tag = null)
     {
-        parent::put($tag ?: class_basename($builder->getModel()), (object)[
+        $index = $this->count();
+        parent::put($tag ?: class_basename($builder->getModel()) . "_$index", (object)[
             'class' => $builder->getModel(),
 			'builder' => $builder,
 			'results' => collect([]),
@@ -77,10 +84,14 @@ class SOQLBatch extends Collection
     public function run()
     {
         if ($this->isEmpty()) return $this;
+        $chunkSize = config('eloquent_sf.batch.select.size', 25);
+        if ($chunkSize > 25) {
+            \SObjects::log('Salesforce will only allow select batchs of 25 queries.', [], 'warn');
+        }
 
         $version = 'v' . collect(\SObjects::versions())->last()['version'];
 
-        foreach ($this->chunk(25) as $chunk) {
+        foreach ($this->chunk($chunkSize) as $chunk) {
             $results = \SObjects::composite('batch', [
                 'method' => 'post',
                 'body' => [

@@ -14,20 +14,24 @@ use Illuminate\Support\Str;
 
 class SOQLConnection extends Connection
 {
+
+    private $all = false;
+
+    public function __construct($all = false)
+    {
+        $this->all = $all;
+    }
 	/**
 	 * {@inheritDoc}
 	 */
 	public function select($query, $bindings = [], $useReadPdo = true)
 	{
-		return $this->run($query, $bindings, function($query, $bindings) {
-			if ($this->pretending()) {
-				return [];
-			}
+		return $this->run($query, $bindings, function($query, $bindings) use ($useReadPdo) {
 
 			$statement = $this->prepare($query, $bindings);
 
 			/** @scrutinizer ignore-call */
-			$result = SObjects::query($statement);
+			$result = $this->all ? SObjects::queryAll($statement) : SObjects::query($statement);
 
 			SObjects::log('SOQL Query', [
 				'query' => $statement
@@ -78,6 +82,12 @@ class SOQLConnection extends Connection
 	 */
 	protected function run($query, $bindings, Closure $callback)
 	{
+        if (isset($this->beforeExecutingCallbacks)) {
+            foreach ($this->beforeExecutingCallbacks as $beforeExecutingCallback) {
+                $beforeExecutingCallback($query, $bindings, $this);
+            }
+        }
+
 		$start = microtime(true);
 
 		try {
@@ -96,30 +106,37 @@ class SOQLConnection extends Connection
 		return $result;
 	}
 
+	// Disabled by Nick T so I can use my own version below
 	private function prepare($query, $bindings)
 	{
-		$query = str_replace('`', '', $query);
-		$bindings = array_map(function($item) {
-			try {
-				if ( $this->isSalesForceNumericString($item) ) {
-					return "'$item'";
-				}
-				if (!$this->isSalesForceId($item) && strtotime($item) !== false) {
-					return $item;
-				}
-			} catch (\Exception $e) {
-				if (is_int($item) || is_float($item)) {
-					return $item;
-				} else {
-					return "'$item'";
-				}
-			}
-			return "'$item'";
-		}, $bindings);
-
-		$query = Str::replaceArray('?', $bindings, $query);
+        $query = Str::replaceArray('?', $bindings, $query);
 		return $query;
 	}
+
+	// private function prepare($query, $bindings)
+	// {
+	// 	$query = str_replace('`', '', $query);
+	// 	$bindings = array_map(function($item) {
+	// 		try {
+	// 			if ( $this->isSalesForceNumericString($item) ) {
+	// 				return "'$item'";
+	// 			}
+	// 			if (!$this->isSalesForceId($item) && strtotime($item) !== false) {
+	// 				return $item;
+	// 			}
+	// 		} catch (\Exception $e) {
+	// 			if (is_int($item) || is_float($item)) {
+	// 				return $item;
+	// 			} else {
+	// 				return "'$item'";
+	// 			}
+	// 		}
+	// 		return "'$item'";
+	// 	}, $bindings);
+
+	// 	$query = Str::replaceArray('?', $bindings, $query);
+	// 	return $query;
+	// }
 
 	/**
 	 * Based on characters and length of $str, determine if it appears to be a
