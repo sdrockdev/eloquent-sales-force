@@ -10,7 +10,10 @@ use Illuminate\Database\Schema\Grammars\MySqlGrammar as SchemaGrammar;
 use Omniphx\Forrest\Exceptions\MissingResourceException;
 use Lester\EloquentSalesForce\Facades\SObjects;
 use Closure;
+use Carbon\Carbon;
 use Illuminate\Support\Str;
+use DateTimeInterface;
+use Illuminate\Support\Carbon as SupportCarbon;
 
 class SOQLConnection extends Connection
 {
@@ -21,6 +24,11 @@ class SOQLConnection extends Connection
     {
         $this->all = $all;
     }
+
+    public function setGrammar($grammar)
+    {
+        $this->queryGrammar = $grammar;
+    }
 	/**
 	 * {@inheritDoc}
 	 */
@@ -29,8 +37,7 @@ class SOQLConnection extends Connection
 		return $this->run($query, $bindings, function($query, $bindings) use ($useReadPdo) {
 
 			$statement = $this->prepare($query, $bindings);
-
-			/** @scrutinizer ignore-call */
+            /** @scrutinizer ignore-call */
 			$result = $this->all ? SObjects::queryAll($statement) : SObjects::query($statement);
 
 			SObjects::log('SOQL Query', [
@@ -106,58 +113,35 @@ class SOQLConnection extends Connection
 		return $result;
 	}
 
-	// Disabled by Nick T so I can use my own version below
 	private function prepare($query, $bindings)
 	{
+        $bindings = $this->prepareBindings($bindings);
         $query = Str::replaceArray('?', $bindings, $query);
 		return $query;
 	}
 
-	// private function prepare($query, $bindings)
-	// {
-	// 	$query = str_replace('`', '', $query);
-	// 	$bindings = array_map(function($item) {
-	// 		try {
-	// 			if ( $this->isSalesForceNumericString($item) ) {
-	// 				return "'$item'";
-	// 			}
-	// 			if (!$this->isSalesForceId($item) && strtotime($item) !== false) {
-	// 				return $item;
-	// 			}
-	// 		} catch (\Exception $e) {
-	// 			if (is_int($item) || is_float($item)) {
-	// 				return $item;
-	// 			} else {
-	// 				return "'$item'";
-	// 			}
-	// 		}
-	// 		return "'$item'";
-	// 	}, $bindings);
+    /**
+     * Prepare the query bindings for execution.
+     *
+     * @param  array  $bindings
+     * @return array
+     */
+    public function prepareBindings(array $bindings)
+    {
+        $grammar = $this->getQueryGrammar();
 
-	// 	$query = Str::replaceArray('?', $bindings, $query);
-	// 	return $query;
-	// }
+        foreach ($bindings as $key => $value) {
+            // We need to transform all instances of DateTimeInterface into the actual
+            // date string. Each query grammar maintains its own date string format
+            // so we'll just ask the grammar for the format to get from the date.
+            if ($value instanceof DateTimeInterface) {
+                $bindings[$key] = $value->format($grammar->getDateFormat());
+            } elseif (is_bool($value)) {
+                $bindings[$key] = (int) $value;
+            }
+        }
 
-	/**
-	 * Based on characters and length of $str, determine if it appears to be a
-	 * SalesForce ID.
-	 *
-	 * @param string $str String to test
-	 *
-	 * @return bool
-	 */
-	public function isSalesForceId($str)
-	{
-		return boolval(\preg_match('/^[0-9a-zA-Z]{15,18}$/', $str));
-	}
+        return $bindings;
+    }
 
-	/**
-	 * Added by Nick T to support CaseNumbers in Salesforce queries.
-	 * This only supports a very specific use case and is not well-tested
-	 */
-	public function isSalesForceNumericString($str)
-	{
-		return strlen($str) == 8 &&
-			(string)(int)$str == $str;
-	}
 }
