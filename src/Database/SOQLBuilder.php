@@ -14,6 +14,7 @@ use Lester\EloquentSalesForce\Model;
 
 class SOQLBuilder extends Builder
 {
+
     /**
 	 * {@inheritDoc}
 	 */
@@ -59,33 +60,6 @@ class SOQLBuilder extends Builder
         $prepared = Str::replaceArray('?', $this->getBindings(), $query);
 		return $prepared;
 	}
-
-	// Old version, previously modified by Nick T
-	// public function toSql()
-	// {
-	// 	$columns = implode(', ', $this->describe());
-	// 	$query = str_replace('*', $columns, parent::toSql());
-	// 	$query = str_replace('`', '', $query);
-	// 	$bindings = array_map(function($item) {
-	// 		try {
-	// 			if ( $this->isSalesForceNumericString($item) ) {
-	// 				return "'$item'";
-	// 			}
-	// 			if (!$this->query->connection->isSalesForceId($item) && \Carbon\Carbon::parse($item) !== false) {
-	// 				return $item;
-	// 			}
-	// 		} catch (\Exception $e) {
-	// 			if (is_int($item) || is_float($item)) {
-	// 				return $item;
-	// 			} else {
-	// 				return "'$item'";
-	// 			}
-	// 		}
-	// 		return "'$item'";
-	// 	}, $this->getBindings());
-	// 	$prepared = Str::replaceArray('?', $bindings, $query);
-	// 	return $prepared;
-	// }
 
 	/**
 	 * {@inheritDoc}
@@ -232,6 +206,7 @@ class SOQLBuilder extends Builder
                     'ids' => implode(',',$chunk->pluck('Id')->values()->toArray()),
                 ]
             ]);
+            SObjects::queryHistory()->push(['delete' => $chunk->pluck('Id')]);
         }
 
     }
@@ -252,7 +227,7 @@ class SOQLBuilder extends Builder
     {
         $this->query->connection = new SOQLConnection(true);
         $this->query->connection->setGrammar($this->query->grammar);
-        return $this->where('IsDeleted', true);
+        return $this->where('IsDeleted', TRUE);
     }
 
     public function getPicklistValues($field)

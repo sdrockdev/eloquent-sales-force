@@ -18,7 +18,7 @@ abstract class Model extends EloquentModel
 	protected $guarded = [];
 	protected $readonly = [];
 
-    protected $dateFormat = 'Y-m-d\TH:i:s\Z';
+    protected $dateFormat = 'Y-m-d\TH:i:s.vO';
 
     protected $dates = [
         'CreatedDate',
@@ -156,6 +156,8 @@ abstract class Model extends EloquentModel
             'body' => $attributes
         ]);
 
+        SObjects::queryHistory()->push(['insert' => $attributes]);
+
         if (isset($result['success'])) {
             if (isset($result['id'])) {
                 $this->Id = $result['id'];
@@ -213,6 +215,8 @@ abstract class Model extends EloquentModel
                 'method' => 'patch',
                 'body' => $dirty->toArray(),
             ]);
+
+            SObjects::queryHistory()->push(['update' => $dirty->toArray()]);
 
             $this->syncChanges();
 

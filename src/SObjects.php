@@ -18,9 +18,12 @@ class SObjects
 
 	private $batch;
 
+    private $queryHistory;
+
 	public function __construct()
 	{
 		$this->batch = new SOQLBatch([]);
+        $this->queryHistory = collect();
 	}
 
 	public function update(\Illuminate\Support\Collection $collection, $allOrNone = false)
@@ -216,6 +219,19 @@ class SObjects
     public function isSalesForceId($str)
     {
         return boolval(\preg_match('/^[0-9a-zA-Z]{15,18}$/', $str));
+    }
+
+    public function versions()
+    {
+        $expire = config('eloquent_sf.forrest.storage.expires');
+        return Cache::remember('sfdc_versions', $expire, function() {
+            return Forrest::versions();
+        });
+    }
+
+    public function queryHistory()
+    {
+        return $this->queryHistory;
     }
 
 }
