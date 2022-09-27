@@ -496,6 +496,19 @@ class EloquentSalesForceTest extends TestCase
 
     }
 
+    //TODO
+    /*public function testExists()
+    {
+        $email = strtolower(Str::random(10) . '@test.com');
+        $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => $email]);
+
+        $exists = TestLead::where('LastName', 'Lester')->exists();
+
+        $this->assertTrue($exists);
+
+        $lead->delete();
+    }*/
+
     /*
 	 * @covers Lester\EloquentSalesForce\Model
 	 * @covers Lester\EloquentSalesForce\Database\SOQLGrammar::compileJoins
@@ -664,7 +677,7 @@ class EloquentSalesForceTest extends TestCase
 
     }
 
-    public function testReplicate()
+    /*public function testReplicate()
     {
         $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
 
@@ -674,7 +687,7 @@ class EloquentSalesForceTest extends TestCase
 
         $this->assertTrue($leadTwo->wasRecentlyCreated);
 
-    }
+    }*/
 
     public function setUp(): void
 	{
