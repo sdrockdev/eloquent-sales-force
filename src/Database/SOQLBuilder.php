@@ -10,7 +10,10 @@ use Lester\EloquentSalesForce\Facades\SObjects;
 use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
 use PDO;
+use Closure;
 use Lester\EloquentSalesForce\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
+
 
 class SOQLBuilder extends Builder
 {
@@ -30,6 +33,12 @@ class SOQLBuilder extends Builder
 
 		parent::__construct($query);
 	}
+
+    //TODO
+    /*public function exists()
+    {
+        dd('here');
+    }*/
 
     /**
      * Set a model instance for the model being queried.
@@ -57,7 +66,13 @@ class SOQLBuilder extends Builder
         $columns = implode(', ', $this->describe());
         $query = str_replace('*', $columns, parent::toSql());
 		$query = str_replace('`', '', $query);
-        $prepared = Str::replaceArray('?', $this->getBindings(), $query);
+
+        $bindings = array_map(
+            fn ($value) => Str::replace("'", "\'", $value),
+            $this->getBindings()
+        );
+        $prepared = Str::replaceArray('?', $bindings, $query);
+
 		return $prepared;
 	}
 
@@ -68,8 +83,13 @@ class SOQLBuilder extends Builder
 	{
 		if (count($this->model->columns) &&
 			in_array('*', $columns)) {
-			$cols = $this->model->columns + ['CreatedDate', 'LastModifiedDate'];
-            if (!in_array($this->model->getTable(), config('eloquent_sf.noSoftDeletesOn', ['User']))) $cols += ['IsDeleted'];
+			$cols = $this->model->columns;
+            if (!in_array('CreatedDate', $cols)) $cols[] = 'CreatedDate';
+            if (!in_array('LastModifiedDate', $cols)) $cols[] = 'LastModifiedDate';
+
+            if (!in_array($this->model->getTable(), config('eloquent_sf.noSoftDeletesOn', ['User'])) &&
+                !in_array('IsDeleted', $cols)) $cols[] = 'IsDeleted';
+
 		} else {
 			$cols = $this->getSalesForceColumns($columns);
 		}
@@ -90,8 +110,13 @@ class SOQLBuilder extends Builder
 
 	/**
 	 * {@inheritDoc}
-	 */
-	public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null)
+     * @param null $perPage
+     * @param array|string|string[] $columns
+     * @param string $pageName
+     * @param null $page
+     * @param null $total
+     */
+	public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null)
 	{
 		// Added by Nick T to use custom model columns
 		$cols = count($this->model->columns) ?
@@ -168,7 +193,9 @@ class SOQLBuilder extends Builder
 
 			return $responseCollection;
 		} catch (\Exception $e) {
-			throw $e;
+			$response = json_decode($e->getMessage());
+            if (is_array($response)) SObjects::processExceptions($response);
+            else throw $e;
 		}
 	}
 

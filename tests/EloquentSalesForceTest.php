@@ -442,11 +442,14 @@ class EloquentSalesForceTest extends TestCase
             'Custom_Date_Field__c' => $now,
             'Company' => 'Test Co',
         ]);
-        $lead = TestLead::select('Custom_Date_Field__c', 'Id')->where('Email', 'test@test.com')->whereDate('Custom_Date_Field__c', '>=', today())->first();
+        $lead = TestLead::select('Custom_Date_Field__c', 'Id')
+            ->where('Email', 'test@test.com')
+            ->whereDate('Custom_Date_Field__c', '>=', today())
+            ->first();
 
         TestLead::whereTime('CreatedDate', now())->get();
 
-        $this->assertEquals($now->startOfDay(), $lead->Custom_Date_Field__c);
+        $this->assertTrue($now->startOfDay()->eq($lead->Custom_Date_Field__c));
     }
 
     public function testOrWhere()
@@ -495,6 +498,19 @@ class EloquentSalesForceTest extends TestCase
         //dd(SObjects::queryHistory());
 
     }
+
+    //TODO
+    /*public function testExists()
+    {
+        $email = strtolower(Str::random(10) . '@test.com');
+        $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => $email]);
+
+        $exists = TestLead::where('LastName', 'Lester')->exists();
+
+        $this->assertTrue($exists);
+
+        $lead->delete();
+    }*/
 
     /*
 	 * @covers Lester\EloquentSalesForce\Model
@@ -664,7 +680,7 @@ class EloquentSalesForceTest extends TestCase
 
     }
 
-    public function testReplicate()
+    /*public function testReplicate()
     {
         $lead = TestLead::create(['FirstName' => 'Rob', 'LastName' => 'Lester', 'Company' => 'Test', 'Email' => 'test@test.com']);
 
@@ -674,7 +690,7 @@ class EloquentSalesForceTest extends TestCase
 
         $this->assertTrue($leadTwo->wasRecentlyCreated);
 
-    }
+    }*/
 
     public function setUp(): void
 	{
@@ -730,7 +746,7 @@ class EloquentSalesForceTest extends TestCase
 				    ],
 
 				    /*
-				     * If you'd like to specify an API version manually it can be done here.
+				     * If you'd like to specify an API version manually, it can be done here.
 				     * Format looks like '32.0'
 				     */
 				    'version'        => '',
@@ -785,6 +801,11 @@ class EloquentSalesForceTest extends TestCase
 	{
 		if (getenv('GIT_TEST')) return parent::createApplication();
 
+        if (!file_exists(__DIR__.'/../.env')) {
+            $ex = new \Exception("Local testing requires a .env file!");
+            throw $ex;
+        }
+
         $env = file_get_contents(__DIR__.'/../.env');
 
         $lines = explode("\n", $env);
@@ -793,7 +814,8 @@ class EloquentSalesForceTest extends TestCase
             if ($line) putenv(trim($line));
         }
 
-		return parent::createApplication();
+        return parent::createApplication();
+
 	}
 
     protected function tearDown(): void

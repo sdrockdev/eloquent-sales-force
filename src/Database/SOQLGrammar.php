@@ -2,14 +2,14 @@
 
 namespace Lester\EloquentSalesForce\Database;
 
+use Carbon\Carbon;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\Grammars\Grammar;
+use Illuminate\Database\Query\JsonExpression;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
-use Illuminate\Database\Query\Builder;
-use Illuminate\Database\Query\JsonExpression;
-use Illuminate\Database\Query\Grammars\Grammar;
+use Lester\EloquentSalesForce\Facades\SObjects;
 use Lester\EloquentSalesForce\ServiceProvider;
-use SObjects;
-use Carbon\Carbon;
 
 class SOQLGrammar extends Grammar
 {
@@ -203,7 +203,7 @@ class SOQLGrammar extends Grammar
 	protected function compileAggregate(Builder $query, $aggregate)
 	{
 		$column = $this->columnize($aggregate['columns']);
-		// If the query has a "distinct" constraint and we're not asking for all columns
+		// If the query has a "distinct" constraint, and we're not asking for all columns,
 		// we need to prepend "distinct" onto the column name so that the query takes
 		// it into account when it performs the aggregating operations on the data.
 		if ($query->distinct && $column !== '*') {
@@ -271,7 +271,7 @@ class SOQLGrammar extends Grammar
      * @return bool
      */
     protected function checkStringLiteral($string) {
-        // some literals use : in them, removing before checking
+        // some literals use ':' in them, removing before checking
         if (Str::contains($string, ":")) {
             $string = explode(':', $string)[0];
         }
