@@ -66,9 +66,42 @@ class SOQLBuilder extends Builder
         $columns = implode(', ', $this->describe());
         $query = str_replace('*', $columns, parent::toSql());
 		$query = str_replace('`', '', $query);
-        $prepared = Str::replaceArray('?', $this->getBindings(), $query);
+
+        $bindings = array_map(
+            fn ($value) => Str::replace("'", "\'", $value),
+            $this->getBindings()
+        );
+        $prepared = Str::replaceArray('?', $bindings, $query);
+
 		return $prepared;
 	}
+
+	// Old version, previously modified by Nick T
+	// public function toSql()
+	// {
+	// 	$columns = implode(', ', $this->describe());
+	// 	$query = str_replace('*', $columns, parent::toSql());
+	// 	$query = str_replace('`', '', $query);
+	// 	$bindings = array_map(function($item) {
+	// 		try {
+	// 			if ( $this->isSalesForceNumericString($item) ) {
+	// 				return "'$item'";
+	// 			}
+	// 			if (!$this->query->connection->isSalesForceId($item) && \Carbon\Carbon::parse($item) !== false) {
+	// 				return $item;
+	// 			}
+	// 		} catch (\Exception $e) {
+	// 			if (is_int($item) || is_float($item)) {
+	// 				return $item;
+	// 			} else {
+	// 				return "'$item'";
+	// 			}
+	// 		}
+	// 		return "'$item'";
+	// 	}, $this->getBindings());
+	// 	$prepared = Str::replaceArray('?', $bindings, $query);
+	// 	return $prepared;
+	// }
 
 	/**
 	 * {@inheritDoc}
@@ -77,8 +110,13 @@ class SOQLBuilder extends Builder
 	{
 		if (count($this->model->columns) &&
 			in_array('*', $columns)) {
-			$cols = $this->model->columns + ['CreatedDate', 'LastModifiedDate'];
-            if (!in_array($this->model->getTable(), config('eloquent_sf.noSoftDeletesOn', ['User']))) $cols += ['IsDeleted'];
+			$cols = $this->model->columns;
+            if (!in_array('CreatedDate', $cols)) $cols[] = 'CreatedDate';
+            if (!in_array('LastModifiedDate', $cols)) $cols[] = 'LastModifiedDate';
+
+            if (!in_array($this->model->getTable(), config('eloquent_sf.noSoftDeletesOn', ['User'])) &&
+                !in_array('IsDeleted', $cols)) $cols[] = 'IsDeleted';
+
 		} else {
 			$cols = $this->getSalesForceColumns($columns);
 		}
@@ -99,10 +137,18 @@ class SOQLBuilder extends Builder
 
 	/**
 	 * {@inheritDoc}
-	 */
-	public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null)
+     * @param null $perPage
+     * @param array|string|string[] $columns
+     * @param string $pageName
+     * @param null $page
+     * @param null $total
+     */
+	public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null, $total = null)
 	{
-		$columns = $this->getSalesForceColumns($columns);
+		// Added by Nick T to use custom model columns
+		$cols = count($this->model->columns) ?
+			$this->model->columns :
+			$this->getSalesForceColumns($columns, $this->model->getTable());
 
 		$table = $this->model->getTable();
 
@@ -120,7 +166,7 @@ class SOQLBuilder extends Builder
 		$page = $page ?: Paginator::resolveCurrentPage($pageName);
 		$perPage = $perPage ?: $this->model->getPerPage();
 		$results = $total
-			? /** @scrutinizer ignore-call */ $this->forPage($page, $perPage)->get($columns)
+			? /** @scrutinizer ignore-call */ $this->forPage($page, $perPage)->get($cols)
 			: $this->model->newCollection();
 		return $this->paginator($results, $total, $perPage, $page, [
 			'path' => Paginator::resolveCurrentPath(),
@@ -174,7 +220,9 @@ class SOQLBuilder extends Builder
 
 			return $responseCollection;
 		} catch (\Exception $e) {
-			throw $e;
+			$response = json_decode($e->getMessage());
+            if (is_array($response)) SObjects::processExceptions($response);
+            else throw $e;
 		}
 	}
 

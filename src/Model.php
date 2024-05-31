@@ -25,6 +25,8 @@ abstract class Model extends EloquentModel
         'LastModifiedDate',
     ];
 
+    public $custom_headers = [];
+
     //public $timestamps = false;
 
     /**
@@ -82,8 +84,8 @@ abstract class Model extends EloquentModel
 
 	public function writeableAttributes($exclude = [])
 	{
-	    $fields = array_merge($this->readonly, $exclude);
-	    return Arr::except($this->attributes, $fields);
+		$fields = array_merge($this->readonly, $exclude);
+		return Arr::except($this->getDirty(), $fields);
 	}
 
 	/*public static function create(array $attributes)
@@ -100,12 +102,18 @@ abstract class Model extends EloquentModel
 
 	public function delete()
 	{
+
+        if ($this->fireModelEvent('deleting') === false) {
+            return false;
+        }
+
 		try {
 			/** @scrutinizer ignore-call */
 			SObjects::sobjects($this->table . '/' . $this->Id, [
 				'method' => 'delete'
 			]);
 			SObjects::log("{$this->table} object {$this->Id} deleted.");
+            $this->fireModelEvent('deleted', false);
 			return true;
 		} catch (\Exception $e) {
 			SObjects::log("{$this->table} object {$this->Id} failed to delete.", (array)$e, 'warning');
@@ -167,7 +175,7 @@ abstract class Model extends EloquentModel
             return false;
         }
 
-        // We will go ahead and set the exists property to true, so that it is set when
+        // We will go ahead and set the 'exists' property to true, so that it is set when
         // the created event is fired, just in case the developer tries to update it
         // during the event. This will allow them to do so and run an update here.
         $this->exists = true;
@@ -211,9 +219,13 @@ abstract class Model extends EloquentModel
             SObjects::authenticate();
             $object = $this->sfObject();
 
+            // The user can set this property on its models to set some custom value for the headers
+            $headers = $this->custom_headers ?: null;
+
             $result = SObjects::sobjects($object, [
                 'method' => 'patch',
                 'body' => $dirty->toArray(),
+                'headers' => $headers
             ]);
 
             SObjects::queryHistory()->push(['update' => $dirty->toArray()]);
@@ -305,7 +317,7 @@ abstract class Model extends EloquentModel
 
 		// Once we have the foreign key names, we'll just create a new Eloquent query
 		// for the related models and returns the relationship instance which will
-		// actually be responsible for retrieving and hydrating every relations.
+		// actually be responsible for retrieving and hydrating every relation.
 		$ownerKey = $ownerKey ?: $instance->getKeyName();
 		return $this->newBelongsTo(
 			$instance->newQuery(), $this, $foreignKey, $ownerKey, $relation
