@@ -14,6 +14,8 @@ use Carbon\Carbon;
 use Illuminate\Support\Str;
 use DateTimeInterface;
 use Illuminate\Support\Carbon as SupportCarbon;
+use Omniphx\Forrest\Exceptions\SalesforceException;
+use Lester\EloquentSalesForce\Exceptions;
 
 class SOQLConnection extends Connection
 {
@@ -34,27 +36,38 @@ class SOQLConnection extends Connection
 	 */
 	public function select($query, $bindings = [], $useReadPdo = true)
 	{
-		return $this->run($query, $bindings, function($query, $bindings) use ($useReadPdo) {
+        try {
+		    return $this->run($query, $bindings, function($query, $bindings) use ($useReadPdo) {
 
-			$statement = $this->prepare($query, $bindings);
-            /** @scrutinizer ignore-call */
-			$result = $this->all ? SObjects::queryAll($statement) : SObjects::query($statement);
+			    $statement = $this->prepare($query, $bindings);
+                /** @scrutinizer ignore-call */
+                try {
+			        $result = $this->all ? SObjects::queryAll($statement) : SObjects::query($statement);
+                    SObjects::queryHistory()->push($statement);
+                } catch (\Exception $e) {
+                    $response = json_decode($e->getMessage());
+                    if (is_array($response)) SObjects::processExceptions($response);
+                    else throw $e;
+                }
 
-			SObjects::log('SOQL Query', [
-				'query' => $statement
-			]);
+			    SObjects::log('SOQL Query', [
+				    'query' => $statement
+			    ]);
 
-			$records = $result['records'];
+			    $records = $result['records'];
 
-			while (isset($result['nextRecordsUrl'])) {
-				$result = SObjects::next($result['nextRecordsUrl']);
-				if (isset($result['records'])) {
-					$records = \array_merge($records, $result['records']);
-				}
-			}
+			    while (isset($result['nextRecordsUrl'])) {
+				    $result = SObjects::next($result['nextRecordsUrl']);
+				    if (isset($result['records'])) {
+					    $records = \array_merge($records, $result['records']);
+				    }
+			    }
 
-			return $records;
-		});
+			    return $records;
+		    });
+        } catch (\Exception $e) {
+            throw $e->getPrevious();
+        }
 	}
 
 	/**
@@ -68,6 +81,10 @@ class SOQLConnection extends Connection
 			}
 
 			$statement = $this->prepare($query, $bindings);
+
+            if ($this->all) {
+                return SObjects::queryAll($statement);
+            }
 
 			/** @scrutinizer ignore-call */
 			return SObjects::query($statement);
@@ -104,8 +121,8 @@ class SOQLConnection extends Connection
 				$e, $query, $bindings, $callback
 			);
 		}
-		// Once we have run the query we will calculate the time that it took to run and
-		// then log the query, bindings, and execution time so we will report them on
+		// Once we have run the query, we will calculate the time that it took to run and
+		// then log the query, bindings, and execution time, so we will report them on
 		// the event that the developer needs them. We'll log time in milliseconds.
 		$this->logQuery(
 			$query, $bindings, $this->getElapsedTime($start)
@@ -117,7 +134,7 @@ class SOQLConnection extends Connection
 	{
         $bindings = $this->prepareBindings($bindings);
         $query = Str::replaceArray('?', $bindings, $query);
-		return $query;
+        return $query;
 	}
 
     /**
@@ -132,12 +149,12 @@ class SOQLConnection extends Connection
 
         foreach ($bindings as $key => $value) {
             // We need to transform all instances of DateTimeInterface into the actual
-            // date string. Each query grammar maintains its own date string format
+            // date string. Each query grammar maintains its own date string format,
             // so we'll just ask the grammar for the format to get from the date.
             if ($value instanceof DateTimeInterface) {
                 $bindings[$key] = $value->format($grammar->getDateFormat());
-            } elseif (is_bool($value)) {
-                $bindings[$key] = (int) $value;
+            } else if (is_bool($value)) {
+                $bindings[$key] = $value ? 'TRUE' : 'FALSE';
             }
         }
 

@@ -2,14 +2,14 @@
 
 namespace Lester\EloquentSalesForce\Database;
 
+use Carbon\Carbon;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\Grammars\Grammar;
+use Illuminate\Database\Query\JsonExpression;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
-use Illuminate\Database\Query\Builder;
-use Illuminate\Database\Query\JsonExpression;
-use Illuminate\Database\Query\Grammars\Grammar;
+use Lester\EloquentSalesForce\Facades\SObjects;
 use Lester\EloquentSalesForce\ServiceProvider;
-use SObjects;
-use Carbon\Carbon;
 
 class SOQLGrammar extends Grammar
 {
@@ -32,6 +32,7 @@ class SOQLGrammar extends Grammar
 		'limit',
 		'offset',
 		'lock',
+        'for',
 	];
 
     public function getModel()
@@ -75,7 +76,7 @@ class SOQLGrammar extends Grammar
         }
         // allow for "false" values to not be wrapped.
 		if (is_bool($where['value'])) {
-			return $this->whereBoolean($query, $where);
+            return $this->whereBoolean($query, $where);
 		}
 
         // allow for literal string values
@@ -202,7 +203,7 @@ class SOQLGrammar extends Grammar
 	protected function compileAggregate(Builder $query, $aggregate)
 	{
 		$column = $this->columnize($aggregate['columns']);
-		// If the query has a "distinct" constraint and we're not asking for all columns
+		// If the query has a "distinct" constraint, and we're not asking for all columns,
 		// we need to prepend "distinct" onto the column name so that the query takes
 		// it into account when it performs the aggregating operations on the data.
 		if ($query->distinct && $column !== '*') {
@@ -235,12 +236,12 @@ class SOQLGrammar extends Grammar
 	 */
 	protected function whereNotNull(Builder $query, $where)
 	{
-		return $this->wrap($where['column']) . ' <> null';
+		return $this->wrap($where['column']) . ' <> NULL';
 	}
 
 	protected function whereNull(Builder $query, $where)
 	{
-		return $this->wrap($where['column']) . ' = null';
+		return $this->wrap($where['column']) . ' = NULL';
 	}
 
 	/**
@@ -251,11 +252,7 @@ class SOQLGrammar extends Grammar
 	 */
 	protected function whereBoolean(Builder $query, $where)
 	{
-		if ($where['value'] === true) {
-			return $this->wrap($where['column']) . $where['operator'] . 'TRUE';
-		} else {
-			return $this->wrap($where['column']) . $where['operator'] . 'FALSE';
-		}
+		return $this->wrap($where['column']) . ' = ?';
 	}
 
     /**
@@ -274,7 +271,7 @@ class SOQLGrammar extends Grammar
      * @return bool
      */
     protected function checkStringLiteral($string) {
-        // some literals use : in them, removing before checking
+        // some literals use ':' in them, removing before checking
         if (Str::contains($string, ":")) {
             $string = explode(':', $string)[0];
         }
@@ -328,6 +325,11 @@ class SOQLGrammar extends Grammar
     public function getDateFormat()
     {
         return 'Y-m-d\TH:i:s\Z';
+    }
+
+    public function compileLock($query, $value)
+    {
+        return 'FOR UPDATE';
     }
 
 }
